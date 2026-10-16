@@ -29,6 +29,8 @@ Xây dựng ứng dụng nội bộ bằng Python và Streamlit để theo dõi 
 - `data/`: CSV mẫu và dữ liệu kiểm thử.
 - `.env`: cấu hình bí mật, không commit lên Git.
 - `requirements.txt`: thư viện.
+- `scripts/install_service.sh`: tạo virtualenv, cài Chromium và đăng ký systemd user services.
+- `scripts/write_service_units.py`: sinh các unit files ngay trong thư mục dự án.
 - `README.md`: hướng dẫn cài đặt, cấu hình, chạy và khắc phục lỗi.
 
 Không tạo thêm module hoặc bảng nếu chưa có nhu cầu rõ ràng.
@@ -108,11 +110,12 @@ Playwright được định nghĩa trong `data/Map-Ward-Oracle_VS_Playwright.csv
 `DATETIME_ID` được chuẩn hóa từ cột Playwright `Noc7`. Mặc định lấy ngày hôm qua
 và tỉnh `Nghe An`. Cấu hình `SMARTF_USER`/`SMARTF_PASS` (hoặc
 `WARD_DAY_USER`/`WARD_DAY_PASSWORD`), `WARD_DAY_URL` nếu cần đổi địa chỉ SmartF,
-và PostgreSQL trong `.env` (xem [.env.example](.env.example)). Cài Chromium nếu
-máy mới chưa có:
+và PostgreSQL trong `.env` (xem [.env.example](.env.example)). Chromium là
+browser binary riêng, không phải package pip; sau khi cài `requirements.txt`,
+cài Chromium vào virtualenv dự án:
 
 ```bash
-python -m playwright install chromium
+PLAYWRIGHT_BROWSERS_PATH=0 .venv/bin/python -m playwright install chromium
 
 # Chỉ tải/kiểm tra CSV, không ghi PostgreSQL
 python -m database.collector_ward_day --dry-run
@@ -144,7 +147,7 @@ Thiết lập `VHKT_USER`/`VHKT_PASSWORD` (hoặc `SMARTF_USER`/`SMARTF_PASS`),
 `.env`. Cài đặt trình duyệt Chromium cho Playwright nếu máy mới chưa có:
 
 ```bash
-python -m playwright install chromium
+PLAYWRIGHT_BROWSERS_PATH=0 .venv/bin/python -m playwright install chromium
 
 # Chỉ tải và kiểm tra CSV, không ghi PostgreSQL
 python -m database.collector_vhkt --dry-run
@@ -186,8 +189,10 @@ python -m pytest tests/test_kpi.py -v
 
 ## Dashboard và quyền admin (giai đoạn 6)
 
-Chạy giao diện bằng `streamlit run app.py`. Các trang Tổng quan, KPI cá nhân,
-Dữ liệu VHKT và Báo cáo tháng đều xem công khai. Chỉ trang Quản trị yêu cầu
+Chạy giao diện bằng `streamlit run app.py`. Để chọn cổng khi chạy thủ công, dùng
+`streamlit run app.py --server.port 8504` (chọn một cổng từ `8502` đến `8505`).
+Các trang Tổng quan, KPI cá nhân, Dữ liệu VHKT và Báo cáo tháng đều xem công
+khai. Chỉ trang Quản trị yêu cầu
 đăng nhập để sửa phân công/số trạm hoặc chạy thu thập thủ công. Cấu hình
 `ADMIN_USERNAME` và `ADMIN_PASSWORD` trong `.env`; không dùng mật khẩu mặc định
 trên môi trường vận hành và không đưa `.env` vào Git.
@@ -200,6 +205,78 @@ ngày, tìm tên và sắp xếp. Dữ liệu VHKT có thể lọc theo chuyên 
 tháng chọn tháng theo `YYYY-MM`; tháng chưa kết thúc được tính lũy kế từ đầu
 tháng đến ngày hiện tại, còn tháng đã kết thúc dùng toàn tháng. Báo cáo có hai
 biểu đồ cột độc lập, mỗi biểu đồ so sánh tỉnh và toàn bộ chuyên viên cho một KPI.
+
+## Cài đặt và chạy như service (giai đoạn 8)
+
+Yêu cầu Linux có `systemd` user manager, Python 3, `venv`, `pip` và quyền truy
+cập PostgreSQL/SmartF. Toàn bộ virtualenv, Chromium và unit files được giữ trong
+thư mục dự án. Installer đăng ký unit với `systemctl --user link`, tạo liên kết
+symlink đến unit project-local; không sao chép unit sang `/etc` hoặc thư mục khác.
+
+```bash
+# Tạo file cấu hình lần đầu; sửa .env, không đưa file này vào Git.
+bash scripts/install_service.sh
+
+# Sau khi đã cấu hình STREAMLIT_PORT (8502-8505), PG_*, SMARTF_*/VHKT_* và ADMIN_* trong .env:
+bash scripts/install_service.sh
+```
+
+`STREAMLIT_PORT` trong `.env` chọn cổng của service; mặc định là `8502`.
+Có thể ghi đè cho lần cài/cấu hình service bằng
+`STREAMLIT_PORT=8504 bash scripts/install_service.sh`. Mọi cấu hình service
+chỉ chấp nhận các cổng `8502`, `8503`, `8504` hoặc `8505`; chạy lại installer
+để cập nhật unit và khởi động lại dashboard.
+
+Installer tạo `.venv`, cài các dependency từ `requirements.txt`, tải Chromium
+cho Playwright vào `.venv`, tạo các unit `kpi-dashboard.service`,
+`kpi-monthly-cleanup.service` và `kpi-monthly-cleanup.timer` ngay tại thư mục gốc
+dự án, rồi khởi động dashboard và lịch dọn dữ liệu. File unit được tạo theo
+đường dẫn thực tế của dự án; không di chuyển thư mục sau khi cài đặt. Nếu chuyển
+dự án, chạy lại installer từ vị trí mới.
+
+`requirements.txt` khai báo package `playwright`; Chromium không thể được cài
+bằng pip nên installer chạy riêng `python -m playwright install chromium` với
+`PLAYWRIGHT_BROWSERS_PATH=0` để browser cũng nằm trong virtualenv dự án. Trên
+Linux tối giản, nếu Chromium báo thiếu thư viện hệ thống, cài các dependency
+được Playwright yêu cầu bằng:
+
+```bash
+sudo .venv/bin/python -m playwright install-deps chromium
+```
+
+Kiểm tra service và xem log:
+
+```bash
+systemctl --user status kpi-dashboard.service
+systemctl --user status kpi-monthly-cleanup.timer
+systemctl --user list-timers kpi-monthly-cleanup.timer
+journalctl --user -u kpi-dashboard.service -f
+```
+
+Dashboard lắng nghe tại cổng đã chọn (`8502` mặc định) trên `0.0.0.0`; giới
+hạn truy cập bằng firewall/reverse proxy của môi trường triển khai. User service
+thường chạy khi tài khoản đăng nhập; để systemd user service tự khởi động sau
+reboot khi chưa đăng nhập, quản trị viên bật linger cho tài khoản triển khai:
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
+Gỡ service chỉ dừng và bỏ đăng ký liên kết; không xóa unit project-local,
+virtualenv, `.env` hoặc dữ liệu:
+
+```bash
+bash scripts/uninstall_service.sh
+```
+
+Nếu không dùng systemd, có thể tiếp tục chạy dashboard thủ công và cấu hình cron
+theo hướng dẫn dọn dữ liệu bên dưới.
+
+Chạy toàn bộ kiểm thử sau khi cài dependencies:
+
+```bash
+.venv/bin/python -m pytest tests -q
+```
 
 ## Dọn dữ liệu nguồn hàng tháng (giai đoạn 7)
 

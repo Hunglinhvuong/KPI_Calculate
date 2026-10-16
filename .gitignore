@@ -2,6 +2,10 @@
 __pycache__/
 *.pyc
 venv/
+.venv/
+kpi-dashboard.service
+kpi-monthly-cleanup.service
+kpi-monthly-cleanup.timer
 logs/*
 !logs/.gitkeep
 .streamlit/secrets.toml
