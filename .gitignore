@@ -10,4 +10,4 @@ logs/*
 !logs/.gitkeep
 .streamlit/secrets.toml
 tests/
-data/
+
