@@ -321,12 +321,16 @@ def _render_monthly_report(wards: pd.DataFrame) -> None:
     employee_rows = monthly[
         (monthly["scope_type"] == "employee") & monthly["scope_id"].notna()
     ].copy()
-    employee_rows["scope_name"] = employee_rows.apply(
+    employee_rows["scope_detail"] = employee_rows.apply(
         lambda row: f"{row['scope_name'] or row['scope_id']} ({row['scope_id']}) — {row['province_name']}",
         axis=1,
     )
     province_rows["scope_label"] = "Tỉnh — " + province_rows["scope_name"].astype(str)
-    employee_rows["scope_label"] = "Chuyên viên — " + employee_rows["scope_name"].astype(str)
+    province_rows["scope_axis_label"] = province_rows["scope_label"]
+    employee_rows["scope_label"] = "Chuyên viên — " + employee_rows["scope_detail"]
+    employee_rows["scope_axis_label"] = employee_rows["scope_name"].fillna(
+        employee_rows["scope_id"]
+    ).astype(str)
     comparison_rows = pd.concat([province_rows, employee_rows], ignore_index=True)
     _show_primary_kpi_comparison(
         comparison_rows,

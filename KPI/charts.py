@@ -90,7 +90,7 @@ def monthly_kpi_comparison_chart(frame: pd.DataFrame, metric: str) -> alt.Chart:
     """Build grouped monthly bars for the province and every employee."""
     if metric not in {"mtcl_2026", "tg_mllltb"}:
         raise ValueError(f"Không hỗ trợ biểu đồ KPI {metric!r}")
-    required = {"scope_label", "scope_type", metric}
+    required = {"scope_label", "scope_axis_label", "scope_type", metric}
     missing = required.difference(frame.columns)
     if missing:
         raise ValueError(f"Thiếu cột biểu đồ tháng: {sorted(missing)}")
@@ -106,7 +106,7 @@ def monthly_kpi_comparison_chart(frame: pd.DataFrame, metric: str) -> alt.Chart:
         .mark_bar()
         .encode(
             x=alt.X(
-                "scope_label:N",
+                "scope_axis_label:N",
                 title="Tỉnh / chuyên viên",
                 sort=None,
                 axis=alt.Axis(labelAngle=-45, labelLimit=240),
