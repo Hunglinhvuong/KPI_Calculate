@@ -244,6 +244,52 @@ Linux tối giản, nếu Chromium báo thiếu thư viện hệ thống, cài c
 sudo .venv/bin/python -m playwright install-deps chromium
 ```
 
+### Cài lịch collector bằng systemd system service
+
+Trên Linux server, cấu hình SmartF/PostgreSQL trong `.env`. Nếu server cần proxy,
+thêm ít nhất `HTTPS_PROXY` vào `.env` (ví dụ `HTTPS_PROXY=http://proxy.example:8080`).
+Có thể khai báo `HTTP_PROXY` và `NO_PROXY` tương ứng; proxy có xác thực cần URL-encode
+username/password. Playwright sử dụng các biến này khi mở Chromium. Các giá trị
+proxy không được tự kế thừa từ terminal khi service chạy, nên phải khai báo trong
+`.env`.
+
+Tạo virtualenv, cài dependencies và Chromium dưới tài khoản ứng dụng trước (ví dụ
+tài khoản `ubuntu`):
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+PLAYWRIGHT_BROWSERS_PATH=0 .venv/bin/python -m playwright install chromium
+```
+
+Cài service/timer system-wide dưới `/etc/systemd/system`. Khi gọi bằng `sudo`,
+installer chọn user gọi `sudo` (`SUDO_USER`) làm user chạy collector, không chạy
+collector bằng `root`:
+
+```bash
+sudo bash scripts/install_systemd_services.sh
+```
+
+Muốn chỉ định user/group khác hoặc đổi giờ chạy, có thể truyền:
+
+```bash
+sudo RUN_AS_USER=ubuntu RUN_AS_GROUP=ubuntu SCHEDULE_TIME=07:00:00 \
+  bash scripts/install_systemd_services.sh
+```
+
+Kiểm tra lịch, chạy thử từng service và xem log:
+
+```bash
+sudo systemctl list-timers kpi-ward-day.timer kpi-vhkt.timer
+sudo systemctl start kpi-ward-day.service
+sudo systemctl start kpi-vhkt.service
+sudo journalctl -u kpi-ward-day.service -u kpi-vhkt.service -f
+```
+
+Collector mặc định lấy dữ liệu ngày hôm qua. Giờ timer theo múi giờ được cấu hình
+trên server. Nếu gặp `ERR_NAME_NOT_RESOLVED`, kiểm tra proxy trong `.env` và kiểm
+tra quyền đọc `.env` của tài khoản chạy service.
+
 Kiểm tra service và xem log:
 
 ```bash

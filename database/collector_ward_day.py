@@ -20,6 +20,7 @@ import pandas as pd
 from playwright.sync_api import Download, Page, sync_playwright
 
 from database import db
+from database.proxy import playwright_proxy_from_env
 
 log = logging.getLogger(__name__)
 DEFAULT_BASE_URL = "https://smartf.mobifone.vn"
@@ -221,7 +222,11 @@ def _browser_download(
     timeout_ms = _timeout_ms()
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=not show_browser, args=BROWSER_ARGS)
+        browser = playwright.chromium.launch(
+            headless=not show_browser,
+            args=BROWSER_ARGS,
+            proxy=playwright_proxy_from_env(),
+        )
         try:
             context = browser.new_context(accept_downloads=True, viewport={"width": 1600, "height": 900})
             try:
