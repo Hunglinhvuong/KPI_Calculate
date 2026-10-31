@@ -56,6 +56,7 @@ cat > "${SERVICE_DIR}/kpi-ward-day.service" <<EOF
 Description=KPI Ward Day collector
 Wants=network-online.target
 After=network-online.target
+OnFailure=kpi-collector-alert@%n.service
 
 [Service]
 Type=oneshot
@@ -88,6 +89,7 @@ cat > "${SERVICE_DIR}/kpi-vhkt.service" <<EOF
 Description=KPI VHKT collector
 Wants=network-online.target
 After=network-online.target
+OnFailure=kpi-collector-alert@%n.service
 
 [Service]
 Type=oneshot
@@ -115,17 +117,32 @@ Unit=kpi-vhkt.service
 WantedBy=timers.target
 EOF
 
+cat > "${SERVICE_DIR}/kpi-collector-alert@.service" <<EOF
+[Unit]
+Description=Send Telegram alert for failed KPI collector %i
+
+[Service]
+Type=oneshot
+User=${RUNTIME_USER}
+Group=${RUNTIME_GROUP}
+WorkingDirectory=${PROJECT_DIR}
+EnvironmentFile=${PROJECT_DIR}/.env
+ExecStart=${VENV_DIR}/bin/python -m jobs.telegram_alert --unit=%i
+EOF
+
 chmod 0644 \
     "${SERVICE_DIR}/kpi-ward-day.service" \
     "${SERVICE_DIR}/kpi-ward-day.timer" \
     "${SERVICE_DIR}/kpi-vhkt.service" \
-    "${SERVICE_DIR}/kpi-vhkt.timer"
+    "${SERVICE_DIR}/kpi-vhkt.timer" \
+    "${SERVICE_DIR}/kpi-collector-alert@.service"
 
 systemd-analyze verify \
     "${SERVICE_DIR}/kpi-ward-day.service" \
     "${SERVICE_DIR}/kpi-ward-day.timer" \
     "${SERVICE_DIR}/kpi-vhkt.service" \
-    "${SERVICE_DIR}/kpi-vhkt.timer"
+    "${SERVICE_DIR}/kpi-vhkt.timer" \
+    "${SERVICE_DIR}/kpi-collector-alert@.service"
 systemctl daemon-reload
 systemctl enable kpi-ward-day.timer kpi-vhkt.timer
 systemctl restart kpi-ward-day.timer kpi-vhkt.timer
@@ -134,3 +151,4 @@ printf 'Installed system services for user %s (group %s), scheduled at %s.\n' \
     "${RUNTIME_USER}" "${RUNTIME_GROUP}" "${SCHEDULE_TIME}"
 printf 'Check timers: sudo systemctl list-timers kpi-ward-day.timer kpi-vhkt.timer\n'
 printf 'Check logs:   sudo journalctl -u kpi-ward-day.service -u kpi-vhkt.service -f\n'
+printf 'Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in %s to enable failure alerts.\n' "${PROJECT_DIR}/.env"

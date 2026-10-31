@@ -119,9 +119,11 @@ PLAYWRIGHT_BROWSERS_PATH=0 .venv/bin/python -m playwright install chromium
 
 # Chỉ tải/kiểm tra CSV, không ghi PostgreSQL
 python -m database.collector_ward_day --dry-run
+python -m database.collector_vhkt --dry-run
 
 # Thu thập ngày hôm qua và upsert vào PostgreSQL
 python -m database.collector_ward_day
+python -m database.collector_vhkt
 
 # Chạy lại ngày cụ thể, hiện trình duyệt để gỡ lỗi
 python -m database.collector_ward_day --date 2026-10-14 --province "Nghe An" --show
@@ -161,6 +163,58 @@ python -m database.collector_vhkt --date 2026-10-14 --province "Nghe An" --show
 # Kiểm thử độc lập, không cần dịch vụ SmartF/PostgreSQL
 python -m pytest tests/test_collector_vhkt.py -v
 ```
+
+## Nạp dữ liệu bù từ CSV tải thủ công
+
+Có thể nạp CSV SmartF chứa nhiều ngày vào database. Các lệnh dưới đây chạy từ
+thư mục gốc dự án, dùng PostgreSQL cấu hình trong `.env` và upsert theo khóa
+nguồn: chạy lại cùng file không tạo bản ghi trùng. Nên chạy `--dry-run` trước
+khi nạp thật; chế độ này kiểm tra định dạng và in khoảng ngày, số ngày, số dòng,
+tỉnh, nhưng không kết nối/ghi PostgreSQL.
+
+### Ward-day tải từ báo cáo SmartF/Playwright
+
+Đặt đường dẫn CSV tải về vào lệnh. Parser bỏ ba dòng metadata đầu, ánh xạ cột
+Playwright theo `data/Map-Ward-Oracle_VS_Playwright.csv` và lấy ngày riêng từ
+cột `Noc7` của từng dòng, nên một file có thể chứa nhiều ngày:
+
+```bash
+# Kiểm tra trước, chưa ghi database
+python -m database.db ward-day-report "/path/to/ward_day.csv" --dry-run
+
+# Nạp/upsert tất cả ngày có trong file
+python -m database.db ward-day-report "/path/to/ward_day.csv"
+```
+
+Kết quả nạp có số dòng thêm mới/cập nhật và danh sách phường chưa ghép được
+(`unmatched_wards`). Các dòng chưa ghép vẫn được lưu nhưng `ward_id` để trống;
+cần cập nhật danh mục `ward` rồi chạy `python -m database.db relink`.
+
+Nếu file là CSV Oracle đã có các cột `DATETIME_ID, PROVINCE, DISTRICT, ...`
+(không phải CSV báo cáo SmartF/Playwright), dùng lệnh tương thích cũ:
+
+```bash
+python -m database.db ward-day "/path/to/oracle_ward_day.csv"
+```
+
+### VHKT tải từ báo cáo SmartF
+
+CSV được kiểm tra và chuẩn hóa theo schema VHKT; ngày được lấy từ `SDATE` trên
+từng dòng. Mọi ngày trong file đều được nạp:
+
+```bash
+# Kiểm tra trước
+python -m database.db vhkt-report "/path/to/vhkt.csv" --dry-run
+
+# Nạp/upsert
+python -m database.db vhkt-report "/path/to/vhkt.csv"
+```
+
+Lệnh không xóa dữ liệu hiện có: bản ghi trùng khóa được cập nhật, bản ghi mới
+được thêm. Chỉ nạp đúng CSV báo cáo của nguồn tương ứng; không dùng CSV ward-day
+cho lệnh VHKT hoặc ngược lại. Sau khi nạp, kiểm tra `date_start`, `date_end`,
+`days`, `rows`, `inserted`, `updated` và `unmatched_wards` trong kết quả để xác
+nhận file đã bao phủ khoảng ngày cần bù.
 
 ## KPI calculation (giai đoạn 5)
 
@@ -205,6 +259,17 @@ ngày, tìm tên và sắp xếp. Dữ liệu VHKT có thể lọc theo chuyên 
 tháng chọn tháng theo `YYYY-MM`; tháng chưa kết thúc được tính lũy kế từ đầu
 tháng đến ngày hiện tại, còn tháng đã kết thúc dùng toàn tháng. Báo cáo có hai
 biểu đồ cột độc lập, mỗi biểu đồ so sánh tỉnh và toàn bộ chuyên viên cho một KPI.
+
+Trang Tổng quan liệt kê các ngày không có bản ghi `ward_day` theo tỉnh trong
+khoảng ngày đang chọn, tối đa đến hết hôm qua. Đây là kiểm tra thiếu dữ liệu
+theo ngày-tỉnh, không xác nhận đã có đủ bản ghi của từng phường. Admin đã đăng
+nhập có thể chọn một ngày-tỉnh trong danh sách và chạy thu thập bù ward-day
+ngay trên trang; danh sách được tải lại sau khi hoàn tất.
+
+Trang cũng liệt kê ngày-tỉnh chưa có bản ghi VHKT và cho admin chạy thu thập bù.
+Vì `vhkt_day` chỉ lưu sự cố, ngày không có bản ghi có thể là không phát sinh sự
+cố, không nhất thiết collector thất bại. Nếu SmartF trả báo cáo trống, collector
+hiện báo lỗi “không có dữ liệu”; cần xác nhận ngày đó không có sự cố từ nguồn.
 
 ## Cài đặt và chạy như service (giai đoạn 8)
 
@@ -275,6 +340,25 @@ Muốn chỉ định user/group khác hoặc đổi giờ chạy, có thể truy
 ```bash
 sudo RUN_AS_USER=ubuntu RUN_AS_GROUP=ubuntu SCHEDULE_TIME=07:00:00 \
   bash scripts/install_systemd_services.sh
+```
+
+Để bật cảnh báo Telegram khi collector ward-day hoặc VHKT thất bại, tạo bot
+Telegram và điền `TELEGRAM_BOT_TOKEN` cùng `TELEGRAM_CHAT_ID` vào `.env`. Không
+đưa bot token vào Git hoặc chia sẻ công khai. Chạy lại installer để cài/cập nhật
+unit gửi cảnh báo:
+
+```bash
+sudo bash scripts/install_systemd_services.sh
+```
+
+Khi service collector thất bại, systemd sẽ kích hoạt `kpi-collector-alert`
+để gửi tin nhắn gồm collector, ngày dữ liệu mặc định (hôm qua), thời điểm lỗi
+và lệnh xem log. Việc gửi cảnh báo không thay đổi mã thoát thất bại của collector.
+Nếu Telegram chưa cấu hình hoặc không gửi được, lỗi gửi cảnh báo được ghi trong
+journal của unit cảnh báo; kiểm tra bằng:
+
+```bash
+sudo journalctl -u 'kpi-collector-alert@*' -n 50 --no-pager
 ```
 
 Kiểm tra lịch, chạy thử từng service và xem log:

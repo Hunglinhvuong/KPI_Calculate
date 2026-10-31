@@ -85,6 +85,175 @@ def _load_kpi_inputs(start_date: date, end_date: date, province: str | None):
     return wards, ward_day, vhkt_day, daily
 
 
+def _missing_ward_day_dates(
+    start_date: date,
+    end_date: date,
+    ward_day: pd.DataFrame,
+    wards: pd.DataFrame,
+) -> list[tuple[str, date]]:
+    """List dates through yesterday with no ward_day rows for each province."""
+    last_expected_date = min(end_date, date.today() - timedelta(days=1))
+    if start_date > last_expected_date or wards.empty:
+        return []
+
+    provinces = wards["province_name"].dropna().astype(str).unique()
+    expected_dates = pd.date_range(start_date, last_expected_date, freq="D").date
+    observed_dates = {}
+    if not ward_day.empty:
+        for province_name, group in ward_day.groupby("province", dropna=True):
+            observed_dates[db.norm_name(province_name)] = set(
+                pd.to_datetime(group["data_date"], errors="coerce").dropna().dt.date
+            )
+
+    missing = []
+    for province_name in provinces:
+        present = observed_dates.get(db.norm_name(province_name), set())
+        missing.extend(
+            (province_name, expected_date)
+            for expected_date in expected_dates
+            if expected_date not in present
+        )
+    return missing
+
+
+def _missing_vhkt_dates(
+    start_date: date,
+    end_date: date,
+    vhkt_day: pd.DataFrame,
+    wards: pd.DataFrame,
+) -> list[tuple[str, date]]:
+    """List dates through yesterday with no VHKT incident rows per province."""
+    last_expected_date = min(end_date, date.today() - timedelta(days=1))
+    if start_date > last_expected_date or wards.empty:
+        return []
+
+    provinces = wards["province_name"].dropna().astype(str).unique()
+    expected_dates = pd.date_range(start_date, last_expected_date, freq="D").date
+    observed_dates = {}
+    if not vhkt_day.empty:
+        for province_name, group in vhkt_day.groupby("province_name", dropna=True):
+            observed_dates[db.norm_name(province_name)] = set(
+                pd.to_datetime(group["data_date"], errors="coerce").dropna().dt.date
+            )
+
+    missing = []
+    for province_name in provinces:
+        present = observed_dates.get(db.norm_name(province_name), set())
+        missing.extend(
+            (province_name, expected_date)
+            for expected_date in expected_dates
+            if expected_date not in present
+        )
+    return missing
+
+
+def _render_missing_ward_days(
+    start_date: date,
+    end_date: date,
+    ward_day: pd.DataFrame,
+    wards: pd.DataFrame,
+) -> None:
+    st.subheader("Ngày thiếu dữ liệu ward-day")
+    backfill_result = st.session_state.pop("overview_ward_day_backfill_result", None)
+    if backfill_result:
+        st.success(backfill_result)
+
+    missing = _missing_ward_day_dates(start_date, end_date, ward_day, wards)
+    st.caption(
+        "Đối chiếu các ngày trong khoảng đang chọn đến hết hôm qua; ngày được xem là "
+        "thiếu khi không có dòng ward-day nào cho tỉnh. Không kiểm tra thiếu từng phường."
+    )
+    if not missing:
+        st.success("Không có ngày thiếu dữ liệu ward-day trong khoảng đã chọn.")
+        return
+
+    missing_frame = pd.DataFrame(missing, columns=["Tỉnh", "Ngày thiếu"])
+    st.warning(f"Có {len(missing):,} ngày-tỉnh chưa có dữ liệu ward-day.")
+    st.dataframe(missing_frame, width="stretch", hide_index=True)
+
+    if not auth.is_admin():
+        return
+
+    choices = {
+        f"{province} — {missing_date:%Y-%m-%d}": (province, missing_date)
+        for province, missing_date in missing
+    }
+    selected = st.selectbox(
+        "Chọn ngày cần thu thập bù",
+        list(choices),
+        key="overview_missing_ward_day",
+    )
+    if st.button("Thu thập bù ward-day", key="overview_collect_missing_ward_day"):
+        province, missing_date = choices[selected]
+        try:
+            with st.spinner(f"Đang thu thập ward-day ngày {missing_date:%Y-%m-%d} — {province}..."):
+                from database.collector_ward_day import collect
+
+                result = collect(missing_date, province)
+        except Exception as exc:
+            log.exception("Admin ward-day backfill failed")
+            st.error(f"Thu thập bù thất bại: {exc}")
+        else:
+            st.session_state["overview_ward_day_backfill_result"] = (
+                f"Thu thập bù hoàn tất: {result}"
+            )
+            st.rerun()
+
+
+def _render_missing_vhkt_days(
+    start_date: date,
+    end_date: date,
+    vhkt_day: pd.DataFrame,
+    wards: pd.DataFrame,
+) -> None:
+    st.subheader("Ngày chưa có bản ghi VHKT")
+    backfill_result = st.session_state.pop("overview_vhkt_backfill_result", None)
+    if backfill_result:
+        st.success(backfill_result)
+
+    missing = _missing_vhkt_dates(start_date, end_date, vhkt_day, wards)
+    st.caption(
+        "Đối chiếu đến hết hôm qua. VHKT chỉ lưu các bản ghi sự cố, nên ngày không có "
+        "bản ghi có thể là không phát sinh sự cố hoặc chưa thu thập; danh sách không "
+        "xác nhận chắc chắn collector đã thất bại."
+    )
+    if not missing:
+        st.success("Không có ngày nào chưa có bản ghi VHKT trong khoảng đã chọn.")
+        return
+
+    missing_frame = pd.DataFrame(missing, columns=["Tỉnh", "Ngày chưa có bản ghi"])
+    st.info(f"Có {len(missing):,} ngày-tỉnh chưa có bản ghi VHKT.")
+    st.dataframe(missing_frame, width="stretch", hide_index=True)
+
+    if not auth.is_admin():
+        return
+
+    choices = {
+        f"{province} — {missing_date:%Y-%m-%d}": (province, missing_date)
+        for province, missing_date in missing
+    }
+    selected = st.selectbox(
+        "Chọn ngày cần đối soát VHKT",
+        list(choices),
+        key="overview_missing_vhkt",
+    )
+    if st.button("Chạy thu thập bù VHKT", key="overview_collect_missing_vhkt"):
+        province, missing_date = choices[selected]
+        try:
+            with st.spinner(f"Đang thu thập VHKT ngày {missing_date:%Y-%m-%d} — {province}..."):
+                from database.collector_vhkt import collect
+
+                result = collect(missing_date, province)
+        except Exception as exc:
+            log.exception("Admin VHKT backfill failed")
+            st.error(f"Đối soát/thu thập VHKT thất bại: {exc}")
+        else:
+            st.session_state["overview_vhkt_backfill_result"] = (
+                f"Thu thập bù VHKT hoàn tất: {result}"
+            )
+            st.rerun()
+
+
 def _show_kpi_table(frame: pd.DataFrame, *, scope_type: str | None = None) -> None:
     if frame.empty:
         st.info("Chưa có dữ liệu KPI trong khoảng thời gian đã chọn.")
@@ -130,7 +299,9 @@ def _render_overview(wards: pd.DataFrame) -> None:
     province = _province_filter(wards, "overview_province")
     try:
         selected_province = None if province == "Tất cả" else province
-        _, _, _, daily = _load_kpi_inputs(first, last, selected_province)
+        selected_wards, ward_day, vhkt_day, daily = _load_kpi_inputs(first, last, selected_province)
+        _render_missing_ward_days(first, last, ward_day, selected_wards)
+        _render_missing_vhkt_days(first, last, vhkt_day, selected_wards)
         if daily.empty:
             st.info("Chưa có dữ liệu KPI phường trong khoảng thời gian đã chọn.")
             return

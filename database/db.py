@@ -463,8 +463,48 @@ def load_ward_day_csv(path, conn=None) -> dict:
     return upsert_ward_day(_read_csv(path), conn)
 
 
+def load_ward_day_report_csv(path, *, dry_run: bool = False) -> dict:
+    """Load a multi-day SmartF/Playwright ward_day report CSV."""
+    from database.collector_ward_day import parse_report_csv
+
+    frame = parse_report_csv(Path(path).read_bytes())
+    report_dates = pd.to_datetime(
+        frame["datetime_id"].astype("string"),
+        format="%Y%m%d%H",
+        errors="raise",
+    ).dt.date
+    result = {
+        "date_start": min(report_dates).isoformat(),
+        "date_end": max(report_dates).isoformat(),
+        "days": int(report_dates.nunique()),
+        "rows": len(frame),
+        "provinces": sorted(frame["province"].dropna().astype(str).unique().tolist()),
+    }
+    if dry_run:
+        return {"status": "validated", **result}
+    return {"status": "loaded", **result, **upsert_ward_day(frame)}
+
+
 def load_vhkt_csv(path, conn=None) -> dict:
     return upsert_vhkt_day(_read_csv(path), conn)
+
+
+def load_vhkt_report_csv(path, *, dry_run: bool = False) -> dict:
+    """Load a multi-day SmartF VHKT report CSV."""
+    from database.collector_vhkt import parse_report_csv
+
+    frame = parse_report_csv(Path(path).read_bytes())
+    report_dates = pd.to_datetime(frame["sdate"], errors="raise").dt.date
+    result = {
+        "date_start": min(report_dates).isoformat(),
+        "date_end": max(report_dates).isoformat(),
+        "days": int(report_dates.nunique()),
+        "rows": len(frame),
+        "provinces": sorted(frame["province_name"].dropna().astype(str).unique().tolist()),
+    }
+    if dry_run:
+        return {"status": "validated", **result}
+    return {"status": "loaded", **result, **upsert_vhkt_day(frame)}
 
 
 # --------------------------------------------------------------------------- dòng lệnh
@@ -472,9 +512,17 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="python -m database.db", description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("init", help="tạo bảng từ schema.sql")
-    for name, helptext in (("ward", "nạp ward.csv"), ("ward-day", "nạp CSV Oracle (WARD_DAY)"), ("vhkt", "nạp CSV VHKT")):
+    for name, helptext in (
+        ("ward", "nạp ward.csv"),
+        ("ward-day", "nạp CSV Oracle (WARD_DAY)"),
+        ("ward-day-report", "nạp CSV ward_day tải từ SmartF/Playwright, hỗ trợ nhiều ngày"),
+        ("vhkt", "nạp CSV VHKT đã chuẩn hóa"),
+        ("vhkt-report", "nạp CSV VHKT tải từ SmartF, hỗ trợ nhiều ngày"),
+    ):
         p = sub.add_parser(name, help=helptext)
         p.add_argument("csv")
+        if name in {"ward-day-report", "vhkt-report"}:
+            p.add_argument("--dry-run", action="store_true", help="chỉ kiểm tra CSV, không ghi PostgreSQL")
     sub.add_parser("relink", help="ghép lại ward_id cho các dòng chưa ghép được")
     args = parser.parse_args(argv)
 
@@ -486,8 +534,12 @@ def main(argv=None) -> int:
         result = load_wards_csv(args.csv)
     elif args.cmd == "ward-day":
         result = load_ward_day_csv(args.csv)
+    elif args.cmd == "ward-day-report":
+        result = load_ward_day_report_csv(args.csv, dry_run=args.dry_run)
     elif args.cmd == "vhkt":
         result = load_vhkt_csv(args.csv)
+    elif args.cmd == "vhkt-report":
+        result = load_vhkt_report_csv(args.csv, dry_run=args.dry_run)
     else:
         result = relink_unmatched()
     print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
