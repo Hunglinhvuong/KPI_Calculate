@@ -48,6 +48,9 @@ if [[ ! "${SCHEDULE_TIME}" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$ ]]; the
     exit 1
 fi
 
+runuser -u "${RUNTIME_USER}" -- env PLAYWRIGHT_BROWSERS_PATH=0 \
+    "${VENV_DIR}/bin/python" -m playwright install chromium
+
 mkdir -p "${PROJECT_DIR}/logs"
 chown "${RUNTIME_USER}:${RUNTIME_GROUP}" "${PROJECT_DIR}/logs"
 

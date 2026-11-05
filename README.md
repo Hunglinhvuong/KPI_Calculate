@@ -129,6 +129,10 @@ python -m database.collector_vhkt
 python -m database.collector_ward_day --date 2026-10-14 --province "Nghe An" --show
 ```
 
+Trong trang Quản trị, admin cũng có thể bật **Thu thập từ ngày đến ngày**.
+Khoảng ngày được tính bao gồm cả hai đầu; mỗi ngày được chạy và upsert riêng,
+giúp có thể chạy lại an toàn nếu một ngày trong khoảng bị lỗi.
+
 ```bash
 python -m pytest tests/test_collector_ward_day.py -v
 ```
@@ -307,6 +311,13 @@ Linux tối giản, nếu Chromium báo thiếu thư viện hệ thống, cài c
 
 ```bash
 sudo .venv/bin/python -m playwright install-deps chromium
+```
+
+Nếu dashboard báo không tìm thấy `chrome-headless-shell`, hãy cài lại Chromium
+bằng đúng Python virtualenv và tài khoản chạy service, sau đó thử thu thập lại:
+
+```bash
+PLAYWRIGHT_BROWSERS_PATH=0 .venv/bin/python -m playwright install chromium
 ```
 
 ### Cài lịch collector bằng systemd system service

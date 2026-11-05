@@ -65,6 +65,32 @@ def _date_range(key: str) -> tuple[date, date]:
     return selected, selected
 
 
+def _collect_date_range(collect, start_date: date, end_date: date, province: str) -> dict:
+    if start_date > end_date:
+        raise ValueError("Ngày bắt đầu phải trước hoặc bằng ngày kết thúc.")
+
+    results = []
+    current_date = start_date
+    while current_date <= end_date:
+        try:
+            results.append(collect(current_date, province))
+        except Exception as exc:
+            raise RuntimeError(
+                f"Thu thập dừng tại ngày {current_date:%Y-%m-%d}; "
+                f"đã hoàn tất {len(results)} ngày trước đó: {exc}"
+            ) from exc
+        current_date += timedelta(days=1)
+
+    return {
+        "status": "success",
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "province": province,
+        "days_collected": len(results),
+        "results": results,
+    }
+
+
 def _province_filter(wards: pd.DataFrame, key: str) -> str | None:
     provinces = sorted(wards["province_name"].dropna().astype(str).unique().tolist())
     if not provinces:
@@ -566,7 +592,28 @@ def _render_admin(wards: pd.DataFrame) -> None:
 
     st.subheader("Chạy thu thập thủ công")
     task = st.radio("Nguồn dữ liệu", ["Phường (Playwright)", "VHKT"], horizontal=True)
-    collect_date = st.date_input("Ngày cần thu thập", value=date.today() - timedelta(days=1), key="admin_collect_date")
+    default_date = date.today() - timedelta(days=1)
+    collect_date_range = st.checkbox(
+        "Thu thập từ ngày đến ngày",
+        key="admin_collect_date_range_enabled",
+    )
+    if collect_date_range:
+        collect_start_date = st.date_input(
+            "Từ ngày",
+            value=default_date,
+            key="admin_collect_start_date",
+        )
+        collect_end_date = st.date_input(
+            "Đến ngày",
+            value=default_date,
+            key="admin_collect_end_date",
+        )
+    else:
+        collect_date = st.date_input(
+            "Ngày cần thu thập",
+            value=default_date,
+            key="admin_collect_date",
+        )
     provinces = sorted(wards["province_name"].dropna().unique().tolist())
     default_province = "Nghe An" if "Nghe An" in provinces else (provinces[0] if provinces else "")
     collect_province = st.selectbox(
@@ -577,12 +624,27 @@ def _render_admin(wards: pd.DataFrame) -> None:
     )
     if st.button("Chạy thu thập", type="primary"):
         try:
-            with st.spinner(f"Đang thu thập {task}..."):
+            with st.spinner(
+                f"Đang thu thập {task}"
+                + (
+                    f" từ {collect_start_date:%Y-%m-%d} đến {collect_end_date:%Y-%m-%d}..."
+                    if collect_date_range
+                    else "..."
+                )
+            ):
                 if task == "Phường (Playwright)":
                     from database.collector_ward_day import collect
                 else:
                     from database.collector_vhkt import collect
-                result = collect(collect_date, collect_province)
+                if collect_date_range:
+                    result = _collect_date_range(
+                        collect,
+                        collect_start_date,
+                        collect_end_date,
+                        collect_province,
+                    )
+                else:
+                    result = collect(collect_date, collect_province)
         except Exception as exc:
             log.exception("Admin data collection failed")
             st.error(f"Thu thập thất bại: {exc}")

@@ -21,6 +21,7 @@ from playwright.sync_api import Download, Page, sync_playwright
 
 from database import db
 from database.proxy import playwright_proxy_from_env
+from database.playwright_utils import launch_chromium
 
 log = logging.getLogger(__name__)
 DEFAULT_BASE_URL = "https://smartf.mobifone.vn"
@@ -232,7 +233,8 @@ def _browser_download(
     timeout_ms = _timeout_ms()
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(
+        browser = launch_chromium(
+            playwright.chromium,
             headless=not show_browser,
             args=BROWSER_ARGS,
             proxy=playwright_proxy_from_env(),
