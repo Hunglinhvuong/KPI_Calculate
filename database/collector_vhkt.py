@@ -68,6 +68,13 @@ def _normalize_space(value: str | None) -> str:
     return " ".join((value or "").split())
 
 
+def _parameter_date(value: str) -> date | None:
+    try:
+        return datetime.strptime(value.strip(), "%m/%d/%Y").date()
+    except ValueError:
+        return None
+
+
 def _required_env(*names: str) -> str:
     for name in names:
         value = os.environ.get(name, "").strip()
@@ -177,7 +184,7 @@ def _set_parameters(page: Page, province: str, report_date: date) -> None:
             _wait_postback(page)
         for selector in (DATE_FROM, DATE_TO):
             box = frame.locator(selector)
-            if box.input_value() != date_text:
+            if _parameter_date(box.input_value()) != report_date:
                 box.fill(date_text)
                 box.press("Tab")
                 _wait_postback(page)
@@ -186,7 +193,10 @@ def _set_parameters(page: Page, province: str, report_date: date) -> None:
             frame.locator(DATE_FROM).input_value(),
             frame.locator(DATE_TO).input_value(),
         )
-        if observed == expected:
+        if (
+            observed[0] == expected[0]
+            and all(_parameter_date(value) == report_date for value in observed[1:])
+        ):
             return
         log.warning("Tham số VHKT chưa khớp (lần %s/3): %s", attempt, observed)
     raise RuntimeError(f"Tham số báo cáo VHKT không khớp sau 3 lần: {observed}")
