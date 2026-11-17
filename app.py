@@ -65,32 +65,6 @@ def _date_range(key: str) -> tuple[date, date]:
     return selected, selected
 
 
-def _collect_date_range(collect, start_date: date, end_date: date, province: str) -> dict:
-    if start_date > end_date:
-        raise ValueError("Ngày bắt đầu phải trước hoặc bằng ngày kết thúc.")
-
-    results = []
-    current_date = start_date
-    while current_date <= end_date:
-        try:
-            results.append(collect(current_date, province))
-        except Exception as exc:
-            raise RuntimeError(
-                f"Thu thập dừng tại ngày {current_date:%Y-%m-%d}; "
-                f"đã hoàn tất {len(results)} ngày trước đó: {exc}"
-            ) from exc
-        current_date += timedelta(days=1)
-
-    return {
-        "status": "success",
-        "start_date": start_date.isoformat(),
-        "end_date": end_date.isoformat(),
-        "province": province,
-        "days_collected": len(results),
-        "results": results,
-    }
-
-
 def _province_filter(wards: pd.DataFrame, key: str) -> str | None:
     provinces = sorted(wards["province_name"].dropna().astype(str).unique().tolist())
     if not provinces:
@@ -637,11 +611,10 @@ def _render_admin(wards: pd.DataFrame) -> None:
                 else:
                     from database.collector_vhkt import collect
                 if collect_date_range:
-                    result = _collect_date_range(
-                        collect,
+                    result = collect(
                         collect_start_date,
-                        collect_end_date,
                         collect_province,
+                        end_date=collect_end_date,
                     )
                 else:
                     result = collect(collect_date, collect_province)

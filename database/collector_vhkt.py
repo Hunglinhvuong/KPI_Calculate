@@ -172,20 +172,30 @@ def _open_report(page: Page, base_url: str, username: str, password: str) -> Non
         menu_item(name).click()
 
 
-def _set_parameters(page: Page, province: str, report_date: date) -> None:
+def _set_parameters(
+    page: Page,
+    province: str,
+    start_date: date,
+    end_date: date | None = None,
+) -> None:
+    end_date = end_date or start_date
     frame = page.frame_locator(IFRAME)
     province_select = frame.locator(SELECT_PROVINCE)
-    date_text = report_date.strftime("%m/%d/%Y")
-    expected = (province, date_text, date_text)
+    start_text = start_date.strftime("%m/%d/%Y")
+    end_text = end_date.strftime("%m/%d/%Y")
+    expected = (province, start_text, end_text)
     observed = None
 
     for attempt in range(1, 4):
         if _normalize_space(province_select.evaluate(SELECTED_TEXT)) != province:
             province_select.select_option(label=province)
             _wait_postback(page)
-        for selector in (DATE_FROM, DATE_TO):
+        for selector, expected_date, date_text in (
+            (DATE_FROM, start_date, start_text),
+            (DATE_TO, end_date, end_text),
+        ):
             box = frame.locator(selector)
-            if _parameter_date(box.input_value()) != report_date:
+            if _parameter_date(box.input_value()) != expected_date:
                 box.fill(date_text)
                 box.press("Tab")
                 _wait_postback(page)
@@ -196,7 +206,8 @@ def _set_parameters(page: Page, province: str, report_date: date) -> None:
         )
         if (
             observed[0] == expected[0]
-            and all(_parameter_date(value) == report_date for value in observed[1:])
+            and _parameter_date(observed[1]) == start_date
+            and _parameter_date(observed[2]) == end_date
         ):
             return
         log.warning("Tham số VHKT chưa khớp (lần %s/3): %s", attempt, observed)
@@ -247,11 +258,13 @@ def parse_report_csv(content: bytes) -> pd.DataFrame:
 
 
 def _browser_download(
-    report_date: date,
+    start_date: date,
     province: str,
     *,
+    end_date: date | None = None,
     show_browser: bool = False,
 ) -> bytes:
+    end_date = end_date or start_date
     username = _required_env("SMARTF_USER", "VHKT_USER")
     password = _required_env("SMARTF_PASS", "VHKT_PASSWORD")
     base_url = os.environ.get("VHKT_URL", "").strip().rstrip("/") or DEFAULT_BASE_URL
@@ -276,8 +289,13 @@ def _browser_download(
                 frame = page.frame_locator(IFRAME)
                 frame.locator("select").first.wait_for(timeout=30_000)
                 _wait_postback(page)
-                _set_parameters(page, province, report_date)
-                log.info("Chạy báo cáo VHKT: tỉnh=%s, ngày=%s", province, report_date.isoformat())
+                _set_parameters(page, province, start_date, end_date)
+                log.info(
+                    "Chạy báo cáo VHKT: tỉnh=%s, từ ngày=%s đến ngày=%s",
+                    province,
+                    start_date.isoformat(),
+                    end_date.isoformat(),
+                )
                 frame.locator(BUTTON_VIEW).click()
                 page.wait_for_timeout(2000)
                 _wait_postback(page)
@@ -318,25 +336,50 @@ def collect(
     report_date: str | date | None = None,
     province: str | None = None,
     *,
+    end_date: str | date | None = None,
     dry_run: bool = False,
     show_browser: bool = False,
 ) -> dict:
-    selected_date = _parse_date(report_date)
+    selected_start_date = _parse_date(report_date)
+    selected_end_date = _parse_date(end_date) if end_date is not None else selected_start_date
+    if selected_start_date > selected_end_date:
+        raise ValueError("Ngày bắt đầu phải trước hoặc bằng ngày kết thúc")
     selected_province = (province or os.environ.get("VHKT_PROVINCE") or DEFAULT_PROVINCE).strip()
     if not selected_province:
         raise ValueError("Tỉnh không được để trống")
 
     log.info(
-        "Bắt đầu thu thập VHKT: province=%s, date=%s",
+        "Bắt đầu thu thập VHKT: province=%s, start_date=%s, end_date=%s",
         selected_province,
-        selected_date.isoformat(),
+        selected_start_date.isoformat(),
+        selected_end_date.isoformat(),
     )
-    content = _browser_download(selected_date, selected_province, show_browser=show_browser)
+    if selected_start_date == selected_end_date:
+        content = _browser_download(
+            selected_start_date,
+            selected_province,
+            show_browser=show_browser,
+        )
+    else:
+        content = _browser_download(
+            selected_start_date,
+            selected_province,
+            end_date=selected_end_date,
+            show_browser=show_browser,
+        )
     frame = parse_report_csv(content)
+    date_result = (
+        {"date": selected_start_date.isoformat()}
+        if selected_start_date == selected_end_date
+        else {
+            "start_date": selected_start_date.isoformat(),
+            "end_date": selected_end_date.isoformat(),
+        }
+    )
     if dry_run:
         return {
             "status": "fetched",
-            "date": selected_date.isoformat(),
+            **date_result,
             "province": selected_province,
             "rows_fetched": len(frame),
         }
@@ -344,7 +387,7 @@ def collect(
     result = db.upsert_vhkt_day(frame)
     output = {
         "status": "success",
-        "date": selected_date.isoformat(),
+        **date_result,
         "province": selected_province,
         "rows_fetched": len(frame),
         **result,
@@ -356,13 +399,25 @@ def collect(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--date", help="Ngày báo cáo, định dạng YYYY-MM-DD (mặc định: hôm qua)")
+    parser.add_argument("--start-date", help="Ngày bắt đầu báo cáo, định dạng YYYY-MM-DD")
+    parser.add_argument("--end-date", help="Ngày kết thúc báo cáo, định dạng YYYY-MM-DD")
     parser.add_argument("--province", help=f"Tỉnh cần lấy (mặc định: VHKT_PROVINCE hoặc {DEFAULT_PROVINCE!r})")
     parser.add_argument("--dry-run", action="store_true", help="Chỉ tải/kiểm tra CSV, không ghi PostgreSQL")
     parser.add_argument("--show", action="store_true", help="Hiện cửa sổ trình duyệt để gỡ lỗi")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
-        result = collect(args.date, args.province, dry_run=args.dry_run, show_browser=args.show)
+        if args.date and (args.start_date or args.end_date):
+            parser.error("--date không thể dùng cùng --start-date/--end-date")
+        if bool(args.start_date) != bool(args.end_date):
+            parser.error("--start-date và --end-date phải được chỉ định cùng nhau")
+        result = collect(
+            args.start_date or args.date,
+            args.province,
+            end_date=args.end_date,
+            dry_run=args.dry_run,
+            show_browser=args.show,
+        )
     except Exception:
         log.exception("Thu thập VHKT thất bại")
         return 1

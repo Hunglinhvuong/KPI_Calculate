@@ -127,11 +127,14 @@ python -m database.collector_vhkt
 
 # Chạy lại ngày cụ thể, hiện trình duyệt để gỡ lỗi
 python -m database.collector_ward_day --date 2026-10-14 --province "Nghe An" --show
+
+# Thu thập một khoảng ngày trong một lần chạy SmartF
+python -m database.collector_ward_day --start-date 2026-10-01 --end-date 2026-10-14 --province "Nghe An"
 ```
 
-Trong trang Quản trị, admin cũng có thể bật **Thu thập từ ngày đến ngày**.
-Khoảng ngày được tính bao gồm cả hai đầu; mỗi ngày được chạy và upsert riêng,
-giúp có thể chạy lại an toàn nếu một ngày trong khoảng bị lỗi.
+Trong trang Quản trị, admin có thể bật **Thu thập từ ngày đến ngày**. Collector
+đặt ngày bắt đầu/kết thúc vào tham số SmartF, chạy báo cáo và tải CSV một lần,
+sau đó upsert toàn bộ kết quả. Khoảng ngày bao gồm cả hai đầu.
 
 ```bash
 python -m pytest tests/test_collector_ward_day.py -v
@@ -163,6 +166,9 @@ python -m database.collector_vhkt
 
 # Chạy lại ngày cụ thể, hiện trình duyệt để gỡ lỗi
 python -m database.collector_vhkt --date 2026-10-14 --province "Nghe An" --show
+
+# Thu thập một khoảng ngày trong một lần chạy SmartF
+python -m database.collector_vhkt --start-date 2026-10-01 --end-date 2026-10-14 --province "Nghe An"
 
 # Kiểm thử độc lập, không cần dịch vụ SmartF/PostgreSQL
 python -m pytest tests/test_collector_vhkt.py -v

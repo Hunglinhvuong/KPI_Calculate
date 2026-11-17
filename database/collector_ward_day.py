@@ -139,7 +139,7 @@ def _login(page: Page, username: str, password: str, base_url: str) -> None:
     page.goto(f"{base_url}/auth/login")
     page.get_by_role("textbox", name="UserName").fill(username)
     page.get_by_role("textbox", name="Password").fill(password)
-    page.get_by_role("button", name="Đăng nhập").click()
+    page.get_by_role("button", name="Đăng nhập", exact=True).click()
     page.wait_for_url(lambda url: "/auth/login" not in str(url))
     page.wait_for_load_state("networkidle")
     log.info("Đăng nhập SmartF thành công")
@@ -168,7 +168,13 @@ def _open_report(page: Page, base_url: str, username: str, password: str) -> Non
         menu_item(name).click()
 
 
-def _set_parameters(page: Page, province: str, report_date: date) -> None:
+def _set_parameters(
+    page: Page,
+    province: str,
+    start_date: date,
+    end_date: date | None = None,
+) -> None:
+    end_date = end_date or start_date
     frame = _frame(page)
     info = frame.evaluate(
         """(name) => {
@@ -184,19 +190,29 @@ def _set_parameters(page: Page, province: str, report_date: date) -> None:
     )
     if not info["province"] or not info["dates"]:
         raise RuntimeError(f"Không tìm thấy tham số tỉnh/ngày trong báo cáo ward_day: {info}")
+    if start_date != end_date and len(info["dates"]) != 2:
+        raise RuntimeError(
+            "Không thể thiết lập khoảng ngày ward_day: báo cáo SmartF phải có đúng "
+            f"hai tham số ngày, đã tìm thấy {len(info['dates'])}"
+        )
 
     province_select = frame.locator("#" + info["province"])
     date_selectors = ["#" + selector for selector in info["dates"]]
-    date_text = report_date.strftime("%m/%d/%Y")
-    expected = (province, [date_text] * len(date_selectors))
+    date_values = (
+        [start_date, end_date]
+        if start_date != end_date
+        else [start_date] * len(date_selectors)
+    )
+    date_texts = [value.strftime("%m/%d/%Y") for value in date_values]
+    expected_dates = date_values
     observed = None
     for attempt in range(1, 4):
         if _normalize_space(province_select.evaluate(SELECTED_TEXT)) != province:
             province_select.select_option(label=province)
             _wait_postback(page)
-        for selector in date_selectors:
+        for selector, date_text in zip(date_selectors, date_texts):
             box = frame.locator(selector)
-            if _parameter_date(box.input_value()) != report_date:
+            if _parameter_date(box.input_value()) != _parameter_date(date_text):
                 box.fill(date_text)
                 box.press("Tab")
                 _wait_postback(page)
@@ -205,8 +221,8 @@ def _set_parameters(page: Page, province: str, report_date: date) -> None:
             [frame.locator(selector).input_value() for selector in date_selectors],
         )
         if (
-            observed[0] == expected[0]
-            and all(_parameter_date(value) == report_date for value in observed[1])
+            observed[0] == province
+            and [_parameter_date(value) for value in observed[1]] == expected_dates
         ):
             return
         log.warning("Tham số ward_day chưa khớp (lần %s/3): %s", attempt, observed)
@@ -222,11 +238,13 @@ def _register_download_listener(page: Page, context, downloads: list[Download]) 
 
 
 def _browser_download(
-    report_date: date,
+    start_date: date,
     province: str,
     *,
+    end_date: date | None = None,
     show_browser: bool = False,
 ) -> bytes:
+    end_date = end_date or start_date
     username = _required_env("SMARTF_USER", "WARD_DAY_USER")
     password = _required_env("SMARTF_PASS", "WARD_DAY_PASSWORD")
     base_url = os.environ.get("WARD_DAY_URL", "").strip().rstrip("/") or DEFAULT_BASE_URL
@@ -251,8 +269,13 @@ def _browser_download(
                 frame = page.frame_locator(IFRAME)
                 frame.locator("select").first.wait_for(timeout=30_000)
                 _wait_postback(page)
-                _set_parameters(page, province, report_date)
-                log.info("Chạy báo cáo ward_day: tỉnh=%s, ngày=%s", province, report_date.isoformat())
+                _set_parameters(page, province, start_date, end_date)
+                log.info(
+                    "Chạy báo cáo ward_day: tỉnh=%s, từ ngày=%s đến ngày=%s",
+                    province,
+                    start_date.isoformat(),
+                    end_date.isoformat(),
+                )
                 frame.locator(BUTTON_VIEW).click()
                 page.wait_for_timeout(2000)
                 _wait_postback(page)
@@ -388,25 +411,50 @@ def collect(
     report_date: str | date | None = None,
     province: str | None = None,
     *,
+    end_date: str | date | None = None,
     dry_run: bool = False,
     show_browser: bool = False,
 ) -> dict:
-    selected_date = _parse_date(report_date)
+    selected_start_date = _parse_date(report_date)
+    selected_end_date = _parse_date(end_date) if end_date is not None else selected_start_date
+    if selected_start_date > selected_end_date:
+        raise ValueError("Ngày bắt đầu phải trước hoặc bằng ngày kết thúc")
     selected_province = (province or os.environ.get("WARD_DAY_PROVINCE") or DEFAULT_PROVINCE).strip()
     if not selected_province:
         raise ValueError("Tỉnh không được để trống")
 
     log.info(
-        "Bắt đầu thu thập ward_day bằng Playwright: province=%s, date=%s",
+        "Bắt đầu thu thập ward_day bằng Playwright: province=%s, start_date=%s, end_date=%s",
         selected_province,
-        selected_date.isoformat(),
+        selected_start_date.isoformat(),
+        selected_end_date.isoformat(),
     )
-    content = _browser_download(selected_date, selected_province, show_browser=show_browser)
+    if selected_start_date == selected_end_date:
+        content = _browser_download(
+            selected_start_date,
+            selected_province,
+            show_browser=show_browser,
+        )
+    else:
+        content = _browser_download(
+            selected_start_date,
+            selected_province,
+            end_date=selected_end_date,
+            show_browser=show_browser,
+        )
     frame = parse_report_csv(content)
+    date_result = (
+        {"date": selected_start_date.isoformat()}
+        if selected_start_date == selected_end_date
+        else {
+            "start_date": selected_start_date.isoformat(),
+            "end_date": selected_end_date.isoformat(),
+        }
+    )
     if dry_run:
         return {
             "status": "fetched",
-            "date": selected_date.isoformat(),
+            **date_result,
             "province": selected_province,
             "rows_fetched": len(frame),
         }
@@ -414,7 +462,7 @@ def collect(
     result = db.upsert_ward_day(frame)
     output = {
         "status": "success",
-        "date": selected_date.isoformat(),
+        **date_result,
         "province": selected_province,
         "rows_fetched": len(frame),
         **result,
@@ -426,6 +474,8 @@ def collect(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--date", help="Ngày báo cáo, định dạng YYYY-MM-DD (mặc định: hôm qua)")
+    parser.add_argument("--start-date", help="Ngày bắt đầu báo cáo, định dạng YYYY-MM-DD")
+    parser.add_argument("--end-date", help="Ngày kết thúc báo cáo, định dạng YYYY-MM-DD")
     parser.add_argument(
         "--province",
         help=f"Tỉnh cần lấy (mặc định: WARD_DAY_PROVINCE hoặc {DEFAULT_PROVINCE!r})",
@@ -435,7 +485,17 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
-        result = collect(args.date, args.province, dry_run=args.dry_run, show_browser=args.show)
+        if args.date and (args.start_date or args.end_date):
+            parser.error("--date không thể dùng cùng --start-date/--end-date")
+        if bool(args.start_date) != bool(args.end_date):
+            parser.error("--start-date và --end-date phải được chỉ định cùng nhau")
+        result = collect(
+            args.start_date or args.date,
+            args.province,
+            end_date=args.end_date,
+            dry_run=args.dry_run,
+            show_browser=args.show,
+        )
     except Exception:
         log.exception("Thu thập ward_day bằng Playwright thất bại")
         return 1
