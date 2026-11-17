@@ -143,7 +143,7 @@ def _login(page: Page, username: str, password: str, base_url: str) -> None:
     page.goto(f"{base_url}/auth/login")
     page.get_by_role("textbox", name="UserName").fill(username)
     page.get_by_role("textbox", name="Password").fill(password)
-    page.get_by_role("button", name="Đăng nhập").click()
+    page.get_by_role("button", name="Đăng nhập", exact=True).click()
     page.wait_for_url(lambda url: "/auth/login" not in str(url))
     page.wait_for_load_state("networkidle")
     log.info("Đăng nhập SmartF thành công")
